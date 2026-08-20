@@ -98,6 +98,7 @@ void Estimator::initializeCamerasFromOptions() {
 
 void Estimator::inputImage(const ImageData &image) {
   inputImageCount++;
+  TicToc feature_tracking_timer;
   FeatureFrame featureFrame;
   if (image.image1.empty()) {
     featureFrame = featureTracker.trackImage(image.timestamp, image.image0);
@@ -105,6 +106,8 @@ void Estimator::inputImage(const ImageData &image) {
     featureFrame =
         featureTracker.trackImage(image.timestamp, image.image0, image.image1);
   }
+  VINS_INFO << "[Timing] feature tracking: " << feature_tracking_timer.toc()
+            << " ms, features: " << featureFrame.size();
   if (options->shouldShowTrack()) {
     track_image.image0 = featureTracker.getTrackImage();
     track_image.timestamp = image.timestamp;
@@ -112,10 +115,8 @@ void Estimator::inputImage(const ImageData &image) {
   }
 
   if (inputImageCount % 2 == 0 || featureBuffer.empty()) {
-    {
-      std::lock_guard<std::mutex> lock(featureBufferMutex);
-      featureBuffer.push(make_pair(image.timestamp, featureFrame));
-    }
+    std::lock_guard<std::mutex> lock(featureBufferMutex);
+    featureBuffer.push(make_pair(image.timestamp, featureFrame));
     featureCondition.notify_one();
   }
 }
@@ -127,9 +128,9 @@ void Estimator::inputIMU(const IMUData &imu) {
   }
   imuCondition.notify_all();
 
-  if (solver_flag == SolverState::NON_LINEAR) {
-    fastPredictIMU(imu);
-  }
+  // if (solver_flag == SolverState::NON_LINEAR) {
+  //   fastPredictIMU(imu);
+  // }
 }
 
 void Estimator::inputFeature(double timestamp,
@@ -211,13 +212,14 @@ void Estimator::processMeasurements() {
         processIMU(imu_datas[i], dt);
       }
     }
-    {
-      std::lock_guard<std::mutex> lock(processingMutex);
-      processImage(feature.second, feature.first);
-      printStatistics(currentTimestamp);
-      collectPointCloudAll(feature.first);
-      previousTimestamp = currentTimestamp;
-    }
+    std::lock_guard<std::mutex> lock(processingMutex);
+    TicToc state_estimation_timer;
+    processImage(feature.second, feature.first);
+    VINS_INFO << "[Timing] state estimation: " << state_estimation_timer.toc()
+              << " ms, timestamp: " << feature.first;
+    printStatistics(currentTimestamp);
+    collectPointCloudAll(feature.first);
+    previousTimestamp = currentTimestamp;
   }
 }
 void Estimator::updateCameraPose(int index) {
@@ -438,27 +440,41 @@ void Estimator::processInitialization(Timestamp timestamp) {
   }
 }
 void Estimator::processNonLinearSolver(Timestamp timestamp) {
+  double pnp_ms = 0.0;
   if (!options->hasImu()) {
+    TicToc timer;
     featureManager.initFramePoseByPnP(frameCount, estimator_state,
                                       cameraTranslation, cameraRotation);
+    pnp_ms = timer.toc();
   }
+  TicToc triangulation_timer;
   featureManager.triangulate(frameCount, estimator_state, cameraTranslation,
                              cameraRotation);
+  const double triangulation_ms = triangulation_timer.toc();
 
   // optimization
+  TicToc optimization_timer;
   optimize();
+  const double optimization_ms = optimization_timer.toc();
+  TicToc outlier_timer;
   set<int> removeIndex;
   outliersRejection(removeIndex);
   featureManager.removeOutlier(removeIndex);
+  const double outlier_ms = outlier_timer.toc();
+  TicToc failure_timer;
   if (failureDetection()) {
     failure_occur = 1;
     resetState();
     initializeCamerasFromOptions();
     return;
   }
+  const double failure_ms = failure_timer.toc();
 
+  TicToc slide_window_timer;
   slideWindow();
   featureManager.removeFailures();
+  const double slide_window_ms = slide_window_timer.toc();
+  TicToc output_timer;
   // prepare output of VINS
   {
     key_poses.timestamp = timestamp;
@@ -478,6 +494,15 @@ void Estimator::processNonLinearSolver(Timestamp timestamp) {
   vio_odom.orientation = Quaterniond(estimator_state[WINDOW_SIZE].rotation);
   vio_odom.velocity = estimator_state[WINDOW_SIZE].velocity;
   safe_vio_odom.set(vio_odom);
+  const double output_ms = output_timer.toc();
+
+  VINS_INFO << "[Timing][Backend] pnp=" << pnp_ms
+            << " ms, triangulation=" << triangulation_ms
+            << " ms, optimization=" << optimization_ms
+            << " ms, outlier=" << outlier_ms
+            << " ms, failure_check=" << failure_ms
+            << " ms, slide_window=" << slide_window_ms
+            << " ms, output=" << output_ms << " ms";
 }
 
 void Estimator::processMonoWithImuInitialization(Timestamp timestamp) {
@@ -994,26 +1019,43 @@ void Estimator::AddFeatureFactors(ceres::Problem &problem) {
   }
 }
 void Estimator::solveOptimization() {
+  TicToc problem_timer;
   ceres::Problem problem;
 
   AddPoseParameterBlocks(problem);
   AddExtrinsicParameterBlocks(problem);
   AddTimeDelayParameterBlock(problem);
-  AddMarginalizationFactor(problem);
+  if (options->shouldUseMarginalization()) {
+    AddMarginalizationFactor(problem);
+  }
   AddIMUFactors(problem);
   AddFeatureFactors(problem);
+  if (!options->shouldUseMarginalization()) {
+    problem.SetParameterBlockConstant(poseArray[0]);
+    if (options->hasImu()) {
+      problem.SetParameterBlockConstant(speedBiasArray[0]);
+    }
+  }
+  const double problem_build_ms = problem_timer.toc();
 
   ceres::Solver::Options ceres_options;
   ceres_options.linear_solver_type =
       options->USE_GPU_CERES ? ceres::DENSE_QR : ceres::DENSE_SCHUR;
   ceres_options.trust_region_strategy_type = ceres::DOGLEG;
+  // ceres_options.num_threads = 4;
   ceres_options.max_num_iterations = options->max_num_iterations();
   ceres_options.max_solver_time_in_seconds =
       (!isNewMarginalization()) ? options->max_solver_time() * 0.8
                                 : options->max_solver_time();
 
   ceres::Solver::Summary summary;
+  TicToc ceres_timer;
   ceres::Solve(ceres_options, &problem, &summary);
+  VINS_INFO << "[Timing][Ceres] problem_build=" << problem_build_ms
+            << " ms, solve=" << ceres_timer.toc()
+            << " ms, iterations=" << summary.iterations.size()
+            << ", parameter_blocks=" << problem.NumParameterBlocks()
+            << ", residual_blocks=" << problem.NumResidualBlocks();
 }
 
 void Estimator::processOldMarginalization() {
@@ -1193,15 +1235,40 @@ std::unordered_map<long, double *> Estimator::createAddrShift(bool is_old) {
 }
 
 void Estimator::optimize() {
+  TicToc prepare_timer;
   prepareParameters();
+  const double prepare_ms = prepare_timer.toc();
+  TicToc solve_timer;
   solveOptimization();
+  const double solve_ms = solve_timer.toc();
+  TicToc update_timer;
   updateEstimates();
-  if (frameCount < WINDOW_SIZE) return;
+  const double update_ms = update_timer.toc();
+  if (frameCount < WINDOW_SIZE) {
+    VINS_INFO << "[Timing][Optimize] prepare=" << prepare_ms
+              << " ms, solve=" << solve_ms << " ms, update=" << update_ms
+              << " ms, marginalization=0 ms (window not full)";
+    return;
+  }
+  if (!options->shouldUseMarginalization()) {
+    last_marginalization_info = nullptr;
+    last_marginalization_parameter_blocks.clear();
+    VINS_INFO << "[Timing][Optimize] prepare=" << prepare_ms
+              << " ms, solve=" << solve_ms << " ms, update=" << update_ms
+              << " ms, marginalization=disabled, first_state=fixed";
+    return;
+  }
+  TicToc marginalization_timer;
   if (isNewMarginalization()) {
     processNewMarginalization();
   } else {
     processOldMarginalization();
   }
+  VINS_INFO << "[Timing][Optimize] prepare=" << prepare_ms
+            << " ms, solve=" << solve_ms << " ms, update=" << update_ms
+            << " ms, marginalization=" << marginalization_timer.toc()
+            << " ms, margin_type="
+            << (isNewMarginalization() ? "second_new" : "old");
 }
 
 void Estimator::slideWindow() {
@@ -1489,13 +1556,13 @@ void Estimator::updateLatestStates() {
   latestImuData.timestamp =
       estimator_state[frameCount].timestamp + options->time_delay;
 
-  queue<IMUData> tmp_imu;
-  {
-    std::lock_guard<std::mutex> imu_lock(imu_mutex);
-    tmp_imu = imuBuffer;
-  }
-  while (!tmp_imu.empty()) {
-    fastPredictIMU(tmp_imu.front());
-    tmp_imu.pop();
-  }
+  // queue<IMUData> tmp_imu;
+  // {
+  //   std::lock_guard<std::mutex> imu_lock(imu_mutex);
+  //   tmp_imu = imuBuffer;
+  // }
+  // while (!tmp_imu.empty()) {
+  //   fastPredictIMU(tmp_imu.front());
+  //   tmp_imu.pop();
+  // }
 }

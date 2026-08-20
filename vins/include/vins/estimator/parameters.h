@@ -55,6 +55,7 @@ struct VINSOptions {
   int USE_GPU = 0;
   int USE_GPU_ACC_FLOW = 0;
   int USE_GPU_CERES = 0;
+  int USE_MARGINALIZATION = 1;
   std::string EX_CALIB_RESULT_PATH;
   std::string VINS_RESULT_PATH;
   std::string OUTPUT_FOLDER;
@@ -97,6 +98,10 @@ struct VINSOptions {
     this->USE_GPU = (int)fsSettings["use_gpu"];
     this->USE_GPU_ACC_FLOW = (int)fsSettings["use_gpu_acc_flow"];
     this->USE_GPU_CERES = (int)fsSettings["use_gpu_ceres"];
+    if (!fsSettings["use_marginalization"].empty()) {
+      this->USE_MARGINALIZATION =
+          (int)fsSettings["use_marginalization"];
+    }
 
     this->imu.useImu = (int)fsSettings["imu"];
     VINS_INFO << "USE_IMU: " << this->hasImu() << std::endl;
@@ -206,6 +211,7 @@ struct VINSOptions {
     return extrinsic_estimation_mode == ExtrinsicEstimationMode::INITIALIZE;
   }
   bool shouldEstimateTD() const { return estimate_td_mode; }
+  bool shouldUseMarginalization() const { return USE_MARGINALIZATION; }
 };
 
 enum SIZE_PARAMETERIZATION {

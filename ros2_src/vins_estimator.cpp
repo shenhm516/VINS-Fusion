@@ -114,7 +114,7 @@ void VinsEstimator::stereoCallback(
 }
 
 void VinsEstimator::timeCallback() {
-  publishImuData();
+  // publishImuData();
   publishOdometry();
   publishImage();
   publishPointCloud();

@@ -24,7 +24,7 @@ def generate_launch_description():
             name='stereo_image_splitter',
             output='screen',
             parameters=[{
-                'use_sim_time': True,
+                'use_sim_time': False,
                 'input_topic': '/usb_cam/image_raw/compressed',
                 'left_topic': '/left/image_raw',
                 'right_topic': '/right/image_raw',
@@ -39,7 +39,7 @@ def generate_launch_description():
             name='vins_estimator',
             output='screen',
             emulate_tty=True,
-            parameters=[{'use_sim_time': True},
+            parameters=[{'use_sim_time': False},
                         {'config_file': config_file}],
         ),
         Node(
@@ -48,6 +48,6 @@ def generate_launch_description():
             name='vins_rviz',
             output='screen',
             arguments=['-d', rviz_config],
-            parameters=[{'use_sim_time': True}],
+            parameters=[{'use_sim_time': False}],
         ),
     ])
