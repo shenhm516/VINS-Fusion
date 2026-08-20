@@ -1,6 +1,4 @@
 #include <cstring>
-#include <chrono>
-#include <algorithm>
 #include <memory>
 #include <string>
 
@@ -23,7 +21,6 @@ class StereoImageSplitter : public rclcpp::Node {
         declare_parameter<std::string>("left_frame_id", "left_camera");
     right_frame_id_ =
         declare_parameter<std::string>("right_frame_id", "right_camera");
-
     const auto qos = rclcpp::SensorDataQoS();
     left_publisher_ =
         create_publisher<sensor_msgs::msg::Image>(left_topic_, qos);
@@ -60,7 +57,6 @@ class StereoImageSplitter : public rclcpp::Node {
 
   void imageCallback(
       const sensor_msgs::msg::CompressedImage::ConstSharedPtr message) {
-    const auto callback_start = std::chrono::steady_clock::now();
     const cv::Mat encoded(1, static_cast<int>(message->data.size()), CV_8UC1,
                           const_cast<unsigned char *>(message->data.data()));
     const cv::Mat stereo = cv::imdecode(encoded, cv::IMREAD_COLOR);
@@ -85,24 +81,6 @@ class StereoImageSplitter : public rclcpp::Node {
     right_publisher_->publish(
         toImageMessage(right, message->header, right_frame_id_));
 
-    const auto callback_end = std::chrono::steady_clock::now();
-    const double elapsed_ms =
-        std::chrono::duration<double, std::milli>(callback_end - callback_start)
-            .count();
-    ++timing_count_;
-    timing_sum_ms_ += elapsed_ms;
-    timing_max_ms_ = std::max(timing_max_ms_, elapsed_ms);
-    if (timing_count_ % 30 == 0) {
-      const double average_ms = timing_sum_ms_ / 30.0;
-      RCLCPP_INFO(get_logger(),
-                  "[timing] JPEG decode + stereo split: avg=%.3f ms, "
-                  "max=%.3f ms, rate=%.1f Hz, samples=%zu",
-                  average_ms, timing_max_ms_, 1000.0 / average_ms,
-                  timing_count_);
-      timing_sum_ms_ = 0.0;
-      timing_max_ms_ = 0.0;
-    }
-
     if (!reported_dimensions_) {
       RCLCPP_INFO(get_logger(),
                   "Decoded combined image %dx%d; publishing each eye as %dx%d",
@@ -117,9 +95,6 @@ class StereoImageSplitter : public rclcpp::Node {
   std::string left_frame_id_;
   std::string right_frame_id_;
   bool reported_dimensions_{false};
-  size_t timing_count_{0};
-  double timing_sum_ms_{0.0};
-  double timing_max_ms_{0.0};
   rclcpp::Subscription<sensor_msgs::msg::CompressedImage>::SharedPtr
       subscription_;
   rclcpp::Publisher<sensor_msgs::msg::Image>::SharedPtr left_publisher_;

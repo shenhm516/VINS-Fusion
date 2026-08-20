@@ -10,29 +10,6 @@
 
 #include <vins/estimator/estimator.h>
 
-#include <algorithm>
-#include <cstdio>
-
-void TimingAccumulator::add(double milliseconds) {
-  constexpr size_t kReportInterval = 30;
-  std::lock_guard<std::mutex> lock(mutex_);
-  ++total_count_;
-  ++window_count_;
-  window_sum_ms_ += milliseconds;
-  window_max_ms_ = std::max(window_max_ms_, milliseconds);
-  if (window_count_ < kReportInterval) return;
-
-  const double average_ms = window_sum_ms_ / window_count_;
-  const double fps = average_ms > 0.0 ? 1000.0 / average_ms : 0.0;
-  std::printf("[VINS timing] %-24s avg=%7.3f ms  max=%7.3f ms  "
-              "rate=%6.1f Hz  samples=%zu\n",
-              label_.c_str(), average_ms, window_max_ms_, fps, total_count_);
-  std::fflush(stdout);
-  window_count_ = 0;
-  window_sum_ms_ = 0.0;
-  window_max_ms_ = 0.0;
-}
-
 Estimator::Estimator() {}
 
 Estimator::~Estimator() {
@@ -122,8 +99,6 @@ void Estimator::initializeCamerasFromOptions() {
 void Estimator::inputImage(const ImageData &image) {
   inputImageCount++;
   FeatureFrame featureFrame;
-  TicToc featureTrackerTime;
-
   if (image.image1.empty()) {
     featureFrame = featureTracker.trackImage(image.timestamp, image.image0);
   } else {
@@ -143,7 +118,6 @@ void Estimator::inputImage(const ImageData &image) {
     }
     featureCondition.notify_one();
   }
-  feature_tracking_timing_.add(featureTrackerTime.toc());
 }
 
 void Estimator::inputIMU(const IMUData &imu) {
@@ -403,7 +377,6 @@ void Estimator::updateStateWithIMU(const IMUData &data, double deltaTime) {
 
 void Estimator::processImage(const FeatureFrame &features,
                              Timestamp timestamp) {
-  TicToc backend_timer;
   setMarginalizationFlag(features);
   insertImageFrame(features, timestamp);
   handleExtrinsicInitialization();
@@ -412,7 +385,6 @@ void Estimator::processImage(const FeatureFrame &features,
   } else {
     processNonLinearSolver(timestamp);
   }
-  backend_timing_.add(backend_timer.toc());
 }
 
 void Estimator::setMarginalizationFlag(const FeatureFrame &features) {
@@ -474,9 +446,7 @@ void Estimator::processNonLinearSolver(Timestamp timestamp) {
                              cameraRotation);
 
   // optimization
-  TicToc t_solve;
   optimize();
-  optimization_timing_.add(t_solve.toc());
   set<int> removeIndex;
   outliersRejection(removeIndex);
   featureManager.removeOutlier(removeIndex);

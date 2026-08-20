@@ -40,20 +40,6 @@
 
 using namespace std;
 
-class TimingAccumulator {
- public:
-  explicit TimingAccumulator(std::string label) : label_(std::move(label)) {}
-  void add(double milliseconds);
-
- private:
-  std::string label_;
-  std::mutex mutex_;
-  size_t total_count_{0};
-  size_t window_count_{0};
-  double window_sum_ms_{0.0};
-  double window_max_ms_{0.0};
-};
-
 class Estimator {
  public:
   Estimator();
@@ -238,7 +224,4 @@ class Estimator {
   std::atomic<bool> isRunning{false};
   std::shared_ptr<VINSOptions> options;
 
-  TimingAccumulator feature_tracking_timing_{"feature tracking"};
-  TimingAccumulator backend_timing_{"backend total"};
-  TimingAccumulator optimization_timing_{"Ceres + marginalization"};
 };
