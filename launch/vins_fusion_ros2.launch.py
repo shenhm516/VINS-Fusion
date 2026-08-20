@@ -8,7 +8,7 @@ def generate_launch_description():
     config_file = os.path.join(
         package_share,
         'config',
-        'stereo_mav',
+        'stereo_25mav',
         'stereo_imu_config.yaml'
     )
     rviz_config = os.path.join(
@@ -30,6 +30,7 @@ def generate_launch_description():
                 'right_topic': '/right/image_raw',
                 'left_frame_id': 'left_camera',
                 'right_frame_id': 'right_camera',
+                'config_file': config_file,
             }],
         ),
         Node(

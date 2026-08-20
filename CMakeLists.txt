@@ -18,7 +18,7 @@ find_package(tf2 REQUIRED)
 find_package(tf2_ros REQUIRED)
 find_package(message_filters REQUIRED)
 find_package(sensor_msgs REQUIRED)
-find_package(OpenCV 4.8 REQUIRED)
+find_package(OpenCV REQUIRED)
 
 
 include_directories(
